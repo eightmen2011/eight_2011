@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>クラウド共有クイズメーカー</title>
+    <title>クラウド共有クイズメーカー【解決版】</title>
     <style>
         :root { --primary: #6c5ce7; --bg: #f0f2f5; }
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; background: var(--bg); margin: 0; padding: 15px; }
@@ -55,7 +55,7 @@
             <div id="final-score" style="font-size: 2rem; color: var(--primary); margin-bottom: 15px;"></div>
             <button class="btn btn-main" onclick="restartQuiz()">もう一度解く (Enter)</button>
         </div>
-        <button class="btn" style="background: #dfe6e9; margin-top: 20px;" onclick="tryToggleEdit()">編集（パスワード）</button>
+        <button class="btn" style="background: #dfe6e9; margin-top: 20px;" onclick="tryToggleEdit()">編集（要パスワード）</button>
     </div>
 
     <div id="edit-view" class="edit-area hidden">
@@ -70,12 +70,9 @@
     </div>
 
 <script>
-    // あなたのGAS URL
-    const GAS_URL = "https://script.google.com";
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbzMjpvjspl5Ln0X9f88fD_cXMR_vMy3qGpgt3T28M0n43RuMpXa3Nlb9eHY-gwDsxiHLg/exec";
 
-    let decks = JSON.parse(localStorage.getItem('quizCloudStoreV3')) || {
-        "デフォルト": { items: [{q: "1+1", a: "2"}], pass: "" }
-    };
+    let decks = JSON.parse(localStorage.getItem('quizCloudV4')) || { "デフォルト": { items: [{q: "1+1", a: "2"}], pass: "" } };
     let currentDeckName = Object.keys(decks)[0];
     let shuffledQuiz = [];
     let currentIndex = 0;
@@ -83,171 +80,100 @@
     let isAnswered = false;
     let isFinished = false;
 
-    // --- クラウド機能 ---
-    async function saveToCloud() {
-        const targetDeck = decks[currentDeckName];
-        if (!targetDeck.items.length) return alert("問題がありません");
-
-        const payload = {
-            action: "save",
-            deckName: currentDeckName,
-            data: JSON.stringify(targetDeck.items),
-            password: targetDeck.pass
-        };
-
+    // --- 修正版：クラウド通信機能 ---
+    async function cloudRequest(payload) {
+        // [MDN] fetchのmodeをcors、redirectをfollowに設定
         try {
-            // [MDN] Fetch APIの使用 (https://developer.mozilla.org)
             const response = await fetch(GAS_URL, {
                 method: "POST",
+                mode: "cors", // no-corsにするとレスポンスが取得できない
+                headers: { "Content-Type": "text/plain;charset=utf-8" }, // JSONだとCORS制限に引っかかる場合があるためtext/plainを使用
                 body: JSON.stringify(payload)
             });
-            const result = await response.json();
-            if(result.result === "success") alert("保存しました！");
-            else alert("GASエラー: " + result.message);
+            const data = await response.json();
+            return data;
         } catch (e) {
-            console.error(e);
-            alert("通信エラー：GAS側のデプロイ設定を『全員』にしているか確認してください。");
+            console.error("Communication error:", e);
+            throw e;
         }
+    }
+
+    async function saveToCloud() {
+        const target = decks[currentDeckName];
+        if (!target.items.length) return alert("問題がありません");
+        try {
+            const res = await cloudRequest({ action: "save", deckName: currentDeckName, data: JSON.stringify(target.items), password: target.pass });
+            if (res.result === "success") alert("クラウド保存成功！");
+        } catch (e) { alert("保存失敗。GASのデプロイ設定を確認してください"); }
     }
 
     async function loadFromCloud() {
         try {
-            const response = await fetch(GAS_URL, {
-                method: "POST",
-                body: JSON.stringify({ action: "load" })
-            });
-            const cloudDecks = await response.json();
-            if (cloudDecks && Array.isArray(cloudDecks)) {
-                cloudDecks.forEach(d => {
-                    decks[d.deckName] = { items: d.items, pass: d.pass || "" };
-                });
-                saveLocal();
-                updateDeckSelect();
-                alert("同期完了しました！");
-                restartQuiz();
-            }
-        } catch (e) {
-            console.error(e);
-            alert("クラウドからの読み込みに失敗しました。");
-        }
+            const cloudDecks = await cloudRequest({ action: "load" });
+            cloudDecks.forEach(d => { decks[d.deckName] = { items: d.items, pass: d.pass || "" }; });
+            saveLocal(); updateDeckSelect(); restartQuiz();
+            alert("クラウド同期完了！");
+        } catch (e) { alert("読込失敗。URLやスプレッドシート名を確認してください"); }
     }
 
-    // --- 基本ロジック ---
-    function saveLocal() { localStorage.setItem('quizCloudStoreV3', JSON.stringify(decks)); }
-
+    // --- 基本機能 ---
+    function saveLocal() { localStorage.setItem('quizCloudV4', JSON.stringify(decks)); }
     function updateDeckSelect() {
         const select = document.getElementById('deckSelect');
         select.innerHTML = Object.keys(decks).map(name => `<option value="${name}" ${name===currentDeckName?'selected':''}>${name}</option>`).join('');
     }
-
     function createNewDeck() {
-        const name = prompt("新しい単語帳の名前:");
+        const name = prompt("単語帳の名前:");
         if (!name || decks[name]) return;
-        const pass = prompt("パスワード(任意):");
-        decks[name] = { items: [], pass: pass || "" };
-        currentDeckName = name;
-        saveLocal(); updateDeckSelect(); tryToggleEdit();
+        decks[name] = { items: [], pass: prompt("パスワード(任意):") || "" };
+        currentDeckName = name; saveLocal(); updateDeckSelect(); tryToggleEdit();
     }
-
-    function switchDeck() {
-        currentDeckName = document.getElementById('deckSelect').value;
-        restartQuiz();
-    }
-
+    function switchDeck() { currentDeckName = document.getElementById('deckSelect').value; restartQuiz(); }
     function tryToggleEdit() {
-        const pass = decks[currentDeckName].pass;
-        if (pass && prompt("パスワード:") !== pass) return alert("失敗");
+        const p = decks[currentDeckName].pass;
+        if (p && prompt("Password:") !== p) return alert("認証失敗");
         document.getElementById('quiz-view').classList.add('hidden');
         document.getElementById('edit-view').classList.remove('hidden');
         document.getElementById('editingDeckName').innerText = `編集: ${currentDeckName}`;
         renderItemList();
     }
-
-    function toggleView() {
-        document.getElementById('quiz-view').classList.remove('hidden');
-        document.getElementById('edit-view').classList.add('hidden');
-        restartQuiz();
-    }
-
+    function toggleView() { document.getElementById('quiz-view').classList.remove('hidden'); document.getElementById('edit-view').classList.add('hidden'); restartQuiz(); }
     function addItem() {
-        const q = document.getElementById('newQ').value.trim();
-        const a = document.getElementById('newA').value.trim();
-        if (q && a) {
-            decks[currentDeckName].items.push({q, a});
-            saveLocal(); renderItemList();
-            document.getElementById('newQ').value = ""; document.getElementById('newA').value = "";
-        }
+        const q = document.getElementById('newQ').value.trim(), a = document.getElementById('newA').value.trim();
+        if (q && a) { decks[currentDeckName].items.push({q, a}); saveLocal(); renderItemList(); document.getElementById('newQ').value = ""; document.getElementById('newA').value = ""; }
     }
-
     function renderItemList() {
         document.getElementById('itemList').innerHTML = decks[currentDeckName].items.map((item, i) => `
             <div class="list-item"><span>Q: ${item.q} / A: ${item.a}</span>
-            <button onclick="decks['${currentDeckName}'].items.splice(${i},1);saveLocal();renderItemList();" style="color:red;border:none;background:none;cursor:pointer;">削除</button></div>
+            <button onclick="decks['${currentDeckName}'].items.splice(${i},1);saveLocal();renderItemList();" style="color:red;cursor:pointer;border:none;background:none;">削除</button></div>
         `).join('');
     }
-
     function deleteCurrentDeck() {
         if (Object.keys(decks).length <= 1) return;
-        if (confirm("削除しますか？")) {
-            delete decks[currentDeckName];
-            currentDeckName = Object.keys(decks)[0];
-            saveLocal(); updateDeckSelect(); restartQuiz();
-        }
+        if (confirm("削除しますか？")) { delete decks[currentDeckName]; currentDeckName = Object.keys(decks)[0]; saveLocal(); updateDeckSelect(); restartQuiz(); }
     }
-
     function restartQuiz() {
         const data = decks[currentDeckName]?.items || [];
-        if (data.length === 0) {
-            document.getElementById('question').innerText = "問題がありません";
-            document.getElementById('quiz-content').classList.add('hidden');
-            return;
-        }
-        shuffledQuiz = [...data].sort(() => Math.random() - 0.5);
-        currentIndex = 0; score = 0; isFinished = false;
-        document.getElementById('quiz-content').classList.remove('hidden');
-        document.getElementById('finish-area').classList.add('hidden');
-        loadQuestion();
+        if (!data.length) { document.getElementById('question').innerText = "空です"; document.getElementById('quiz-content').classList.add('hidden'); return; }
+        shuffledQuiz = [...data].sort(() => Math.random() - 0.5); currentIndex = 0; score = 0; isFinished = false;
+        document.getElementById('quiz-content').classList.remove('hidden'); document.getElementById('finish-area').classList.add('hidden'); loadQuestion();
     }
-
     function loadQuestion() {
-        if (currentIndex >= shuffledQuiz.length) {
-            isFinished = true;
-            document.getElementById('quiz-content').classList.add('hidden');
-            document.getElementById('finish-area').classList.remove('hidden');
-            document.getElementById('final-score').innerText = `${score} / ${shuffledQuiz.length}`;
-            return;
-        }
-        isAnswered = false;
-        document.getElementById('progress').innerText = `${currentIndex + 1} / ${shuffledQuiz.length}`;
-        document.getElementById('question').innerText = shuffledQuiz[currentIndex].q;
-        document.getElementById('userInput').value = ""; document.getElementById('userInput').disabled = false;
-        document.getElementById('result').innerText = "";
-        document.getElementById('checkBtn').classList.remove('hidden');
-        document.getElementById('nextBtn').classList.add('hidden');
-        setTimeout(()=>document.getElementById('userInput').focus(), 50);
+        if (currentIndex >= shuffledQuiz.length) { isFinished = true; document.getElementById('quiz-content').classList.add('hidden'); document.getElementById('finish-area').classList.remove('hidden'); document.getElementById('final-score').innerText = `${score} / ${shuffledQuiz.length}`; return; }
+        isAnswered = false; document.getElementById('progress').innerText = `${currentIndex + 1} / ${shuffledQuiz.length}`; document.getElementById('question').innerText = shuffledQuiz[currentIndex].q;
+        document.getElementById('userInput').value = ""; document.getElementById('userInput').disabled = false; document.getElementById('result').innerText = "";
+        document.getElementById('checkBtn').classList.remove('hidden'); document.getElementById('nextBtn').classList.add('hidden'); setTimeout(()=>document.getElementById('userInput').focus(), 50);
     }
-
     function checkAnswer() {
-        const user = document.getElementById('userInput').value.trim().toLowerCase();
-        const correct = shuffledQuiz[currentIndex].a.toLowerCase();
-        const res = document.getElementById('result');
-        if (user === correct) { res.innerText = "正解！ ✨"; res.className = "result correct"; score++; }
-        else { res.innerText = `不正解...\n答え: ${shuffledQuiz[currentIndex].a}`; res.className = "result wrong"; }
-        isAnswered = true; document.getElementById('userInput').disabled = true;
-        document.getElementById('checkBtn').classList.add('hidden');
-        document.getElementById('nextBtn').classList.remove('hidden');
+        const u = document.getElementById('userInput').value.trim().toLowerCase(), c = shuffledQuiz[currentIndex].a.toLowerCase();
+        const r = document.getElementById('result');
+        if (u === c) { r.innerText = "正解！ ✨"; r.className = "result correct"; score++; }
+        else { r.innerText = `不正解...\n答え: ${shuffledQuiz[currentIndex].a}`; r.className = "result wrong"; }
+        isAnswered = true; document.getElementById('userInput').disabled = true; document.getElementById('checkBtn').classList.add('hidden'); document.getElementById('nextBtn').classList.remove('hidden');
     }
-
     function nextQuestion() { currentIndex++; loadQuestion(); }
-
-    window.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !document.getElementById('quiz-view').classList.contains('hidden')) {
-            if (isFinished) restartQuiz(); else if (!isAnswered) checkAnswer(); else nextQuestion();
-        }
-    });
-
-    updateDeckSelect();
-    restartQuiz();
+    window.addEventListener("keydown", (e) => { if (e.key === "Enter" && !document.getElementById('quiz-view').classList.contains('hidden')) { if (isFinished) restartQuiz(); else if (!isAnswered) checkAnswer(); else nextQuestion(); } });
+    updateDeckSelect(); restartQuiz();
 </script>
 </body>
 </html>
