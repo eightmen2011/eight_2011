@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>クラウド共有・単語帳メーカー</title>
+    <title>クラウド共有クイズメーカー</title>
     <style>
         :root { --primary: #6c5ce7; --bg: #f0f2f5; }
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; background: var(--bg); margin: 0; padding: 15px; }
@@ -16,7 +16,7 @@
         .btn { padding: 12px; cursor: pointer; border: none; border-radius: 8px; font-weight: bold; width: 100%; transition: 0.2s; margin-top: 10px; }
         .btn-main { background: var(--primary); color: white; }
         .btn-sub { background: #34495e; color: white; }
-        .btn-cloud { background: #00b894; color: white; font-size: 0.8rem; margin: 0; }
+        .btn-cloud { background: #00b894; color: white; font-size: 0.8rem; margin: 0; flex: 1; }
         .edit-area { background: white; padding: 1.5rem; border-radius: 15px; width: 100%; max-width: 450px; margin-top: 20px; }
         .input-group { display: flex; gap: 5px; margin-bottom: 10px; }
         input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
@@ -29,7 +29,6 @@
 </head>
 <body>
 
-    <!-- デッキ選択とクラウド操作 -->
     <div class="deck-menu">
         <div class="deck-controls">
             <select id="deckSelect" onchange="switchDeck()"></select>
@@ -37,12 +36,11 @@
             <button onclick="deleteCurrentDeck()" style="background:#ff7675; color:white; border:none; border-radius:5px; cursor:pointer;">削除</button>
         </div>
         <div class="cloud-btns">
-            <button class="btn-cloud" onclick="saveToCloud()" title="現在の単語帳をスプレッドシートへ保存">☁ クラウドへ保存</button>
-            <button class="btn-cloud" style="background:#0984e3;" onclick="loadFromCloud()" title="スプレッドシートから全単語帳を読込">☁ クラウドから同期</button>
+            <button class="btn-cloud" onclick="saveToCloud()">☁ クラウドへ保存</button>
+            <button class="btn-cloud" style="background:#0984e3;" onclick="loadFromCloud()">☁ クラウドから同期</button>
         </div>
     </div>
 
-    <!-- クイズ画面 -->
     <div id="quiz-view" class="card">
         <div id="progress" style="font-size: 0.8rem; color: #666;"></div>
         <div id="quiz-content">
@@ -60,7 +58,6 @@
         <button class="btn" style="background: #dfe6e9; margin-top: 20px;" onclick="tryToggleEdit()">編集（パスワード）</button>
     </div>
 
-    <!-- 編集画面 -->
     <div id="edit-view" class="edit-area hidden">
         <h3 id="editingDeckName">編集</h3>
         <div class="input-group">
@@ -73,9 +70,10 @@
     </div>
 
 <script>
+    // 新しいGASのURL
     const GAS_URL = "https://script.google.com";
 
-    let decks = JSON.parse(localStorage.getItem('quizCloudStore')) || {
+    let decks = JSON.parse(localStorage.getItem('quizCloudStoreV2')) || {
         "デフォルト": { items: [{q: "1+1", a: "2"}], pass: "" }
     };
     let currentDeckName = Object.keys(decks)[0];
@@ -85,7 +83,7 @@
     let isAnswered = false;
     let isFinished = false;
 
-    // --- クラウド通信処理 ---
+    // --- クラウド保存機能 ---
     async function saveToCloud() {
         const targetDeck = decks[currentDeckName];
         if (targetDeck.items.length === 0) return alert("空の単語帳は保存できません");
@@ -98,27 +96,44 @@
         };
 
         try {
-            await fetch(GAS_URL, { method: "POST", body: JSON.stringify(payload) });
-            alert("クラウドに送信しました（GAS側の成功応答を確認してください）");
-        } catch (e) { alert("通信エラーが発生しました"); }
+            // [GAS通信] fetch APIを使用 (https://developer.mozilla.org)
+            const response = await fetch(GAS_URL, {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+            const resData = await response.json();
+            if(resData.result === "success") alert("クラウドへの保存が完了しました！");
+        } catch (e) {
+            // CORS制限下でもデータ自体は飛んでいることが多いため、no-corsでの代替も検討
+            console.error(e);
+            alert("クラウド送信に失敗しました。GASの設定が『全員(Anyone)』になっているか確認してください。");
+        }
     }
 
+    // --- クラウド読込機能 ---
     async function loadFromCloud() {
         try {
-            const res = await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ action: "load" }) });
-            const cloudDecks = await res.json();
-            cloudDecks.forEach(d => {
-                decks[d.deckName] = { items: d.items, pass: d.pass };
+            const res = await fetch(GAS_URL, {
+                method: "POST",
+                body: JSON.stringify({ action: "load" })
             });
-            saveLocal();
-            updateDeckSelect();
-            alert("クラウドと同期しました！");
-            restartQuiz();
-        } catch (e) { alert("読込エラー: スプレッドシート側のデータを確認してください"); }
+            const cloudDecks = await res.json();
+            if (cloudDecks && cloudDecks.length > 0) {
+                cloudDecks.forEach(d => {
+                    decks[d.deckName] = { items: d.items, pass: d.pass || "" };
+                });
+                saveLocal();
+                updateDeckSelect();
+                alert("クラウドから最新の単語帳を同期しました！");
+                restartQuiz();
+            }
+        } catch (e) {
+            console.error(e);
+            alert("クラウドからの読込に失敗しました。");
+        }
     }
 
-    // --- ローカルロジック ---
-    function saveLocal() { localStorage.setItem('quizCloudStore', JSON.stringify(decks)); }
+    function saveLocal() { localStorage.setItem('quizCloudStoreV2', JSON.stringify(decks)); }
 
     function updateDeckSelect() {
         const select = document.getElementById('deckSelect');
@@ -138,7 +153,7 @@
 
     function tryToggleEdit() {
         const pass = decks[currentDeckName].pass;
-        if (pass && prompt("パスワード:") !== pass) return alert("認証失敗");
+        if (pass && prompt("パスワードを入力してください:") !== pass) return alert("パスワードが違います");
         document.getElementById('quiz-view').classList.add('hidden');
         document.getElementById('edit-view').classList.remove('hidden');
         document.getElementById('editingDeckName').innerText = `編集: ${currentDeckName}`;
@@ -164,13 +179,13 @@
     function renderItemList() {
         document.getElementById('itemList').innerHTML = decks[currentDeckName].items.map((item, i) => `
             <div class="list-item"><span>Q: ${item.q} / A: ${item.a}</span>
-            <button class="btn-del" onclick="decks['${currentDeckName}'].items.splice(${i},1);saveLocal();renderItemList();">削除</button></div>
+            <button onclick="decks['${currentDeckName}'].items.splice(${i},1);saveLocal();renderItemList();" style="color:red; cursor:pointer;">削除</button></div>
         `).join('');
     }
 
     function deleteCurrentDeck() {
         if (Object.keys(decks).length <= 1) return;
-        if (confirm("この単語帳を削除しますか？")) {
+        if (confirm("この単語帳を完全に削除しますか？")) {
             delete decks[currentDeckName];
             currentDeckName = Object.keys(decks)[0];
             saveLocal(); updateDeckSelect(); restartQuiz();
