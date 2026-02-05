@@ -82,21 +82,19 @@
 
     // --- 修正版：クラウド通信機能 ---
     async function cloudRequest(payload) {
-        // [MDN] fetchのmodeをcors、redirectをfollowに設定
-        try {
-            const response = await fetch(GAS_URL, {
-                method: "POST",
-                mode: "cors", // no-corsにするとレスポンスが取得できない
-                headers: { "Content-Type": "text/plain;charset=utf-8" }, // JSONだとCORS制限に引っかかる場合があるためtext/plainを使用
-                body: JSON.stringify(payload)
-            });
-            const data = await response.json();
-            return data;
-        } catch (e) {
-            console.error("Communication error:", e);
-            throw e;
-        }
+    try {
+        const response = await fetch(GAS_URL, {
+            method: "POST",
+            body: JSON.stringify(payload) // 余計なヘッダーを付けないのが一番安定します
+        });
+        const data = await response.json();
+        return data;
+    } catch (e) {
+        console.error("GAS通信エラー詳細:", e);
+        throw e;
     }
+}
+
 
     async function saveToCloud() {
         const target = decks[currentDeckName];
