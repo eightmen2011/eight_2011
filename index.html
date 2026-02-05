@@ -70,10 +70,10 @@
     </div>
 
 <script>
-    // 新しいGASのURL
+    // あなたのGAS URL
     const GAS_URL = "https://script.google.com";
 
-    let decks = JSON.parse(localStorage.getItem('quizCloudStoreV2')) || {
+    let decks = JSON.parse(localStorage.getItem('quizCloudStoreV3')) || {
         "デフォルト": { items: [{q: "1+1", a: "2"}], pass: "" }
     };
     let currentDeckName = Object.keys(decks)[0];
@@ -83,11 +83,11 @@
     let isAnswered = false;
     let isFinished = false;
 
-    // --- クラウド保存機能 ---
+    // --- クラウド機能 ---
     async function saveToCloud() {
         const targetDeck = decks[currentDeckName];
-        if (targetDeck.items.length === 0) return alert("空の単語帳は保存できません");
-        
+        if (!targetDeck.items.length) return alert("問題がありません");
+
         const payload = {
             action: "save",
             deckName: currentDeckName,
@@ -96,44 +96,44 @@
         };
 
         try {
-            // [GAS通信] fetch APIを使用 (https://developer.mozilla.org)
+            // [MDN] Fetch APIの使用 (https://developer.mozilla.org)
             const response = await fetch(GAS_URL, {
                 method: "POST",
                 body: JSON.stringify(payload)
             });
-            const resData = await response.json();
-            if(resData.result === "success") alert("クラウドへの保存が完了しました！");
+            const result = await response.json();
+            if(result.result === "success") alert("保存しました！");
+            else alert("GASエラー: " + result.message);
         } catch (e) {
-            // CORS制限下でもデータ自体は飛んでいることが多いため、no-corsでの代替も検討
             console.error(e);
-            alert("クラウド送信に失敗しました。GASの設定が『全員(Anyone)』になっているか確認してください。");
+            alert("通信エラー：GAS側のデプロイ設定を『全員』にしているか確認してください。");
         }
     }
 
-    // --- クラウド読込機能 ---
     async function loadFromCloud() {
         try {
-            const res = await fetch(GAS_URL, {
+            const response = await fetch(GAS_URL, {
                 method: "POST",
                 body: JSON.stringify({ action: "load" })
             });
-            const cloudDecks = await res.json();
-            if (cloudDecks && cloudDecks.length > 0) {
+            const cloudDecks = await response.json();
+            if (cloudDecks && Array.isArray(cloudDecks)) {
                 cloudDecks.forEach(d => {
                     decks[d.deckName] = { items: d.items, pass: d.pass || "" };
                 });
                 saveLocal();
                 updateDeckSelect();
-                alert("クラウドから最新の単語帳を同期しました！");
+                alert("同期完了しました！");
                 restartQuiz();
             }
         } catch (e) {
             console.error(e);
-            alert("クラウドからの読込に失敗しました。");
+            alert("クラウドからの読み込みに失敗しました。");
         }
     }
 
-    function saveLocal() { localStorage.setItem('quizCloudStoreV2', JSON.stringify(decks)); }
+    // --- 基本ロジック ---
+    function saveLocal() { localStorage.setItem('quizCloudStoreV3', JSON.stringify(decks)); }
 
     function updateDeckSelect() {
         const select = document.getElementById('deckSelect');
@@ -143,17 +143,20 @@
     function createNewDeck() {
         const name = prompt("新しい単語帳の名前:");
         if (!name || decks[name]) return;
-        const pass = prompt("編集用パスワード（任意）:");
+        const pass = prompt("パスワード(任意):");
         decks[name] = { items: [], pass: pass || "" };
         currentDeckName = name;
         saveLocal(); updateDeckSelect(); tryToggleEdit();
     }
 
-    function switchDeck() { currentDeckName = document.getElementById('deckSelect').value; restartQuiz(); }
+    function switchDeck() {
+        currentDeckName = document.getElementById('deckSelect').value;
+        restartQuiz();
+    }
 
     function tryToggleEdit() {
         const pass = decks[currentDeckName].pass;
-        if (pass && prompt("パスワードを入力してください:") !== pass) return alert("パスワードが違います");
+        if (pass && prompt("パスワード:") !== pass) return alert("失敗");
         document.getElementById('quiz-view').classList.add('hidden');
         document.getElementById('edit-view').classList.remove('hidden');
         document.getElementById('editingDeckName').innerText = `編集: ${currentDeckName}`;
@@ -179,13 +182,13 @@
     function renderItemList() {
         document.getElementById('itemList').innerHTML = decks[currentDeckName].items.map((item, i) => `
             <div class="list-item"><span>Q: ${item.q} / A: ${item.a}</span>
-            <button onclick="decks['${currentDeckName}'].items.splice(${i},1);saveLocal();renderItemList();" style="color:red; cursor:pointer;">削除</button></div>
+            <button onclick="decks['${currentDeckName}'].items.splice(${i},1);saveLocal();renderItemList();" style="color:red;border:none;background:none;cursor:pointer;">削除</button></div>
         `).join('');
     }
 
     function deleteCurrentDeck() {
         if (Object.keys(decks).length <= 1) return;
-        if (confirm("この単語帳を完全に削除しますか？")) {
+        if (confirm("削除しますか？")) {
             delete decks[currentDeckName];
             currentDeckName = Object.keys(decks)[0];
             saveLocal(); updateDeckSelect(); restartQuiz();
@@ -193,7 +196,7 @@
     }
 
     function restartQuiz() {
-        const data = decks[currentDeckName].items;
+        const data = decks[currentDeckName]?.items || [];
         if (data.length === 0) {
             document.getElementById('question').innerText = "問題がありません";
             document.getElementById('quiz-content').classList.add('hidden');
