@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>クラウド共有・単語帳メーカー</title>
+    <style>
+        :root { --primary: #6c5ce7; --bg: #f0f2f5; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; background: var(--bg); margin: 0; padding: 15px; }
+        .card { background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 450px; text-align: center; }
+        .hidden { display: none !important; }
+        .deck-menu { margin-bottom: 20px; width: 100%; max-width: 450px; display: flex; flex-direction: column; gap: 8px; }
+        .deck-controls { display: flex; gap: 5px; }
+        select { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #ddd; }
+        .cloud-btns { display: flex; gap: 5px; margin-top: 5px; }
+        .btn { padding: 12px; cursor: pointer; border: none; border-radius: 8px; font-weight: bold; width: 100%; transition: 0.2s; margin-top: 10px; }
+        .btn-main { background: var(--primary); color: white; }
+        .btn-sub { background: #34495e; color: white; }
+        .btn-cloud { background: #00b894; color: white; font-size: 0.8rem; margin: 0; }
+        .edit-area { background: white; padding: 1.5rem; border-radius: 15px; width: 100%; max-width: 450px; margin-top: 20px; }
+        .input-group { display: flex; gap: 5px; margin-bottom: 10px; }
+        input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+        .list-item { display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #eee; font-size: 0.8rem; text-align: left; }
+        .question { font-size: 1.6rem; font-weight: bold; margin: 1.5rem 0; min-height: 4rem; display: flex; align-items: center; justify-content: center; }
+        .result { margin-top: 1rem; font-weight: bold; min-height: 2.5rem; white-space: pre-wrap; }
+        .correct { color: #2ecc71; }
+        .wrong { color: #e74c3c; }
+    </style>
+</head>
+<body>
+
+    <!-- デッキ選択とクラウド操作 -->
+    <div class="deck-menu">
+        <div class="deck-controls">
+            <select id="deckSelect" onchange="switchDeck()"></select>
+            <button onclick="createNewDeck()" style="padding:0 10px; border:none; border-radius:5px; cursor:pointer;">＋新規</button>
+            <button onclick="deleteCurrentDeck()" style="background:#ff7675; color:white; border:none; border-radius:5px; cursor:pointer;">削除</button>
+        </div>
+        <div class="cloud-btns">
+            <button class="btn-cloud" onclick="saveToCloud()" title="現在の単語帳をスプレッドシートへ保存">☁ クラウドへ保存</button>
+            <button class="btn-cloud" style="background:#0984e3;" onclick="loadFromCloud()" title="スプレッドシートから全単語帳を読込">☁ クラウドから同期</button>
+        </div>
+    </div>
+
+    <!-- クイズ画面 -->
+    <div id="quiz-view" class="card">
+        <div id="progress" style="font-size: 0.8rem; color: #666;"></div>
+        <div id="quiz-content">
+            <div id="question" class="question">読み込み中...</div>
+            <input type="text" id="userInput" placeholder="答えを入力..." autocomplete="off">
+            <button id="checkBtn" class="btn btn-main" onclick="checkAnswer()">判定 (Enter)</button>
+            <button id="nextBtn" class="btn btn-sub hidden" onclick="nextQuestion()">次へ (Enter)</button>
+            <div id="result" class="result"></div>
+        </div>
+        <div id="finish-area" class="hidden">
+            <h2>全問終了！</h2>
+            <div id="final-score" style="font-size: 2rem; color: var(--primary); margin-bottom: 15px;"></div>
+            <button class="btn btn-main" onclick="restartQuiz()">もう一度解く (Enter)</button>
+        </div>
+        <button class="btn" style="background: #dfe6e9; margin-top: 20px;" onclick="tryToggleEdit()">編集（パスワード）</button>
+    </div>
+
+    <!-- 編集画面 -->
+    <div id="edit-view" class="edit-area hidden">
+        <h3 id="editingDeckName">編集</h3>
+        <div class="input-group">
+            <input type="text" id="newQ" placeholder="問題">
+            <input type="text" id="newA" placeholder="答え">
+            <button class="btn-main" onclick="addItem()" style="padding:0 15px; border-radius:5px;">追加</button>
+        </div>
+        <div id="itemList" style="max-height: 250px; overflow-y: auto; margin-bottom: 15px;"></div>
+        <button class="btn btn-sub" onclick="toggleView()">クイズに戻る</button>
+    </div>
+
+<script>
+    const GAS_URL = "https://script.google.com";
+
+    let decks = JSON.parse(localStorage.getItem('quizCloudStore')) || {
+        "デフォルト": { items: [{q: "1+1", a: "2"}], pass: "" }
+    };
+    let currentDeckName = Object.keys(decks)[0];
+    let shuffledQuiz = [];
+    let currentIndex = 0;
+    let score = 0;
+    let isAnswered = false;
+    let isFinished = false;
+
+    // --- クラウド通信処理 ---
+    async function saveToCloud() {
+        const targetDeck = decks[currentDeckName];
+        if (targetDeck.items.length === 0) return alert("空の単語帳は保存できません");
+        
+        const payload = {
+            action: "save",
+            deckName: currentDeckName,
+            data: JSON.stringify(targetDeck.items),
+            password: targetDeck.pass
+        };
+
+        try {
+            await fetch(GAS_URL, { method: "POST", body: JSON.stringify(payload) });
+            alert("クラウドに送信しました（GAS側の成功応答を確認してください）");
+        } catch (e) { alert("通信エラーが発生しました"); }
+    }
+
+    async function loadFromCloud() {
+        try {
+            const res = await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ action: "load" }) });
+            const cloudDecks = await res.json();
+            cloudDecks.forEach(d => {
+                decks[d.deckName] = { items: d.items, pass: d.pass };
+            });
+            saveLocal();
+            updateDeckSelect();
+            alert("クラウドと同期しました！");
+            restartQuiz();
+        } catch (e) { alert("読込エラー: スプレッドシート側のデータを確認してください"); }
+    }
+
+    // --- ローカルロジック ---
+    function saveLocal() { localStorage.setItem('quizCloudStore', JSON.stringify(decks)); }
+
+    function updateDeckSelect() {
+        const select = document.getElementById('deckSelect');
+        select.innerHTML = Object.keys(decks).map(name => `<option value="${name}" ${name===currentDeckName?'selected':''}>${name}</option>`).join('');
+    }
+
+    function createNewDeck() {
+        const name = prompt("新しい単語帳の名前:");
+        if (!name || decks[name]) return;
+        const pass = prompt("編集用パスワード（任意）:");
+        decks[name] = { items: [], pass: pass || "" };
+        currentDeckName = name;
+        saveLocal(); updateDeckSelect(); tryToggleEdit();
+    }
+
+    function switchDeck() { currentDeckName = document.getElementById('deckSelect').value; restartQuiz(); }
+
+    function tryToggleEdit() {
+        const pass = decks[currentDeckName].pass;
+        if (pass && prompt("パスワード:") !== pass) return alert("認証失敗");
+        document.getElementById('quiz-view').classList.add('hidden');
+        document.getElementById('edit-view').classList.remove('hidden');
+        document.getElementById('editingDeckName').innerText = `編集: ${currentDeckName}`;
+        renderItemList();
+    }
+
+    function toggleView() {
+        document.getElementById('quiz-view').classList.remove('hidden');
+        document.getElementById('edit-view').classList.add('hidden');
+        restartQuiz();
+    }
+
+    function addItem() {
+        const q = document.getElementById('newQ').value.trim();
+        const a = document.getElementById('newA').value.trim();
+        if (q && a) {
+            decks[currentDeckName].items.push({q, a});
+            saveLocal(); renderItemList();
+            document.getElementById('newQ').value = ""; document.getElementById('newA').value = "";
+        }
+    }
+
+    function renderItemList() {
+        document.getElementById('itemList').innerHTML = decks[currentDeckName].items.map((item, i) => `
+            <div class="list-item"><span>Q: ${item.q} / A: ${item.a}</span>
+            <button class="btn-del" onclick="decks['${currentDeckName}'].items.splice(${i},1);saveLocal();renderItemList();">削除</button></div>
+        `).join('');
+    }
+
+    function deleteCurrentDeck() {
+        if (Object.keys(decks).length <= 1) return;
+        if (confirm("この単語帳を削除しますか？")) {
+            delete decks[currentDeckName];
+            currentDeckName = Object.keys(decks)[0];
+            saveLocal(); updateDeckSelect(); restartQuiz();
+        }
+    }
+
+    function restartQuiz() {
+        const data = decks[currentDeckName].items;
+        if (data.length === 0) {
+            document.getElementById('question').innerText = "問題がありません";
+            document.getElementById('quiz-content').classList.add('hidden');
+            return;
+        }
+        shuffledQuiz = [...data].sort(() => Math.random() - 0.5);
+        currentIndex = 0; score = 0; isFinished = false;
+        document.getElementById('quiz-content').classList.remove('hidden');
+        document.getElementById('finish-area').classList.add('hidden');
+        loadQuestion();
+    }
+
+    function loadQuestion() {
+        if (currentIndex >= shuffledQuiz.length) {
+            isFinished = true;
+            document.getElementById('quiz-content').classList.add('hidden');
+            document.getElementById('finish-area').classList.remove('hidden');
+            document.getElementById('final-score').innerText = `${score} / ${shuffledQuiz.length}`;
+            return;
+        }
+        isAnswered = false;
+        document.getElementById('progress').innerText = `${currentIndex + 1} / ${shuffledQuiz.length}`;
+        document.getElementById('question').innerText = shuffledQuiz[currentIndex].q;
+        document.getElementById('userInput').value = ""; document.getElementById('userInput').disabled = false;
+        document.getElementById('result').innerText = "";
+        document.getElementById('checkBtn').classList.remove('hidden');
+        document.getElementById('nextBtn').classList.add('hidden');
+        setTimeout(()=>document.getElementById('userInput').focus(), 50);
+    }
+
+    function checkAnswer() {
+        const user = document.getElementById('userInput').value.trim().toLowerCase();
+        const correct = shuffledQuiz[currentIndex].a.toLowerCase();
+        const res = document.getElementById('result');
+        if (user === correct) { res.innerText = "正解！ ✨"; res.className = "result correct"; score++; }
+        else { res.innerText = `不正解...\n答え: ${shuffledQuiz[currentIndex].a}`; res.className = "result wrong"; }
+        isAnswered = true; document.getElementById('userInput').disabled = true;
+        document.getElementById('checkBtn').classList.add('hidden');
+        document.getElementById('nextBtn').classList.remove('hidden');
+    }
+
+    function nextQuestion() { currentIndex++; loadQuestion(); }
+
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !document.getElementById('quiz-view').classList.contains('hidden')) {
+            if (isFinished) restartQuiz(); else if (!isAnswered) checkAnswer(); else nextQuestion();
+        }
+    });
+
+    updateDeckSelect();
+    restartQuiz();
+</script>
+</body>
+</html>
